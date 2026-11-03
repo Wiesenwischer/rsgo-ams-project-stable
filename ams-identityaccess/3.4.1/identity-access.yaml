@@ -1,0 +1,248 @@
+# IdentityAccess Stack Fragment
+# IdentityServer-based identity provider services
+
+metadata:
+  name: IdentityAccess
+  description: Identity Provider services (IdentityServer, AdminPortal, ClientHub, EmailSender)
+
+variables:
+  # Email Settings
+  MAIL_SERVER:
+    label: Mail Server
+    description: SMTP server hostname
+    type: String
+    required: true
+    group: Email
+
+  MAIL_PORT:
+    label: Mail Port
+    description: SMTP server port
+    type: Port
+    default: "587"
+    group: Email
+
+  MAIL_SENDER_NAME:
+    label: Mail Sender Name
+    description: Display name for outgoing emails
+    type: String
+    default: ams.project
+    required: true
+    group: Email
+
+  MAIL_SENDER:
+    label: Mail Sender Address
+    description: Email address for outgoing emails
+    type: Email
+    required: true
+    group: Email
+
+  MAIL_PASSWORD:
+    label: Mail Password
+    description: SMTP authentication password
+    type: Password
+    group: Email
+
+  MAIL_IS_AUTHENTICATION_REQUIRED:
+    label: Mail Authentication Required
+    description: Whether SMTP authentication is required
+    type: Boolean
+    default: "false"
+    group: Email
+
+  MAIL_USE_SSL:
+    label: Mail Encryption
+    description: >-
+      Transport encryption for the SMTP connection. Leaving the field unselected is the
+      default and keeps the behaviour every installation has today: the EmailSender
+      negotiates STARTTLS whenever the relay offers it. Pick "Off" to force a plain
+      unencrypted connection, or "Implicit SSL" to open the socket with TLS right away
+      (SMTPS, usually port 465 -- set Mail Port accordingly).
+    type: Select
+    options:
+      - value: "false"
+        label: "Off (plain SMTP)"
+      - value: "true"
+        label: Implicit SSL (SMTPS)
+    default: ""
+    required: false
+    group: Email
+    order: 100
+
+
+  # Logging
+  LOG_MAX_SIZE:
+    label: Log Max Size
+    description: Maximum size per log file
+    type: String
+    default: 5m
+    group: Logging
+
+  LOG_MAX_FILE:
+    label: Log Max Files
+    description: Maximum number of log files to retain
+    type: String
+    default: "3"
+    group: Logging
+
+
+services:
+  identityaccess-migrator:
+    # 3.3.3: resolves the runtime database user by the login's SID instead of by name.
+    # A login that owns the database is already mapped to [dbo], so the old name lookup
+    # found nothing and CREATE USER failed with "The login already has an account with
+    # the user name 'dbo'" (error 15063) — the installation aborted here.
+    image: amssolution/identityaccess.migrator:linux-v3.4.1
+    containerName: identityaccess-migrator
+    lifecycle: init
+    environment:
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME: ${DB_NAME}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_ADMIN_USER: ${DB_ADMIN_USER}
+      DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      DB_TRANSPORT_NAME: ${DB_TRANSPORT_NAME}
+      # Client URL seeding — the ConfigurationDbContextSeed in this migrator
+      # reads ClientUrls from IConfiguration and writes the resulting redirect
+      # URIs into IdentityAccess.ClientRedirectUris. These MUST live on the
+      # migrator service, not on identity-api, because the IdentityServer
+      # runtime does not re-seed clients at start.
+      ClientUrls__ProjectDesktop: http://localhost/wpf
+      ClientUrls__ProjectDesktopV2: http://localhost/wpf
+      ClientUrls__WebBffBaseUrls__0: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:5000
+      ClientUrls__ReactClientBaseUrls__0: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:5000
+    networks:
+      - ams-project-identity
+
+  identity-api:
+    # 3.3.2: emits refresh_expires_in on the authorization_code login flow (3.3.1
+    # only did so when offline_access appeared in RequestedScopes, which IS4 never
+    # populates), so the BFF sizes its token-vault TTL to the refresh-token lifetime
+    # instead of the ~1h access-token lifetime. Fixes "Sitzung abgelaufen" ~1h after login.
+    image: amssolution/identityaccess.identityserver:linux-v3.4.1
+    containerName: identity-api
+    ports:
+      - "7614:80"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://0.0.0.0:80
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME: ${DB_NAME}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      ServiceBusTimeToWaitBeforeTriggeringCircuitBreaker: ${SERVICE_BUS_TIME_TO_WAIT_BEFORE_TRIGGERING_CIRCUIT_BREAKER}
+      ExitOnCriticalError: ${EXIT_ON_CRITICAL_ERROR}
+      CultureCode: ${CULTURE_CODE}
+      IdentityServerUrl: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:7614
+      Serilog__LogstashUrl: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:8080
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+      CertificatePath: /etc/ssl/certs/identity-api.pfx
+      CertificatePassword: P@ssw0rd!
+      DB_TRANSPORT_NAME: ${DB_TRANSPORT_NAME}
+    volumes:
+      - profilePictures:/app/wwwroot/picture
+    networks:
+      - ams-project-identity
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 80
+
+  adminportal:
+    image: amssolution/identityaccess.adminportal:linux-v3.4.1
+    containerName: adminportal
+    ports:
+      - "7615:80"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://0.0.0.0:80
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME: ${DB_NAME}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      ServiceBusTimeToWaitBeforeTriggeringCircuitBreaker: ${SERVICE_BUS_TIME_TO_WAIT_BEFORE_TRIGGERING_CIRCUIT_BREAKER}
+      ExitOnCriticalError: ${EXIT_ON_CRITICAL_ERROR}
+      CultureCode: ${CULTURE_CODE}
+      IdentityServerUrl: http://identity-api
+      Serilog__LogstashUrl: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:8080
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+      DB_TRANSPORT_NAME: ${DB_TRANSPORT_NAME}
+    networks:
+      - ams-project-identity
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 80
+
+  identityaccess-clienthub:
+    image: amssolution/identityaccess.clienthub:linux-v3.4.1
+    containerName: identityaccess-clienthub
+    ports:
+      - "7616:80"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://0.0.0.0:80
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME: ${DB_NAME}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      ServiceBusTimeToWaitBeforeTriggeringCircuitBreaker: ${SERVICE_BUS_TIME_TO_WAIT_BEFORE_TRIGGERING_CIRCUIT_BREAKER}
+      ExitOnCriticalError: ${EXIT_ON_CRITICAL_ERROR}
+      Serilog__LogstashUrl: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:8080
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+      DB_TRANSPORT_NAME: ${DB_TRANSPORT_NAME}
+    networks:
+      - ams-project-identity
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 80
+
+  identityaccess-emailsender:
+    image: amssolution/identityaccess.emailsender:linux-v3.4.1
+    containerName: identityaccess-emailsender
+    ports:
+      - "7617:80"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: http://0.0.0.0:80
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME: ${DB_NAME}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      ServiceBusTimeToWaitBeforeTriggeringCircuitBreaker: ${SERVICE_BUS_TIME_TO_WAIT_BEFORE_TRIGGERING_CIRCUIT_BREAKER}
+      ExitOnCriticalError: ${EXIT_ON_CRITICAL_ERROR}
+      CultureCode: ${CULTURE_CODE}
+      EmailSettings__MailServer: ${MAIL_SERVER}
+      EmailSettings__Port: ${MAIL_PORT}
+      EmailSettings__UseSsl: ${MAIL_USE_SSL}
+      EmailSettings__SenderName: ${MAIL_SENDER_NAME}
+      EmailSettings__Sender: ${MAIL_SENDER}
+      EmailSettings__Password: ${MAIL_PASSWORD}
+      EmailSettings__IsAuthenticationRequired: ${MAIL_IS_AUTHENTICATION_REQUIRED}
+      Serilog__LogstashUrl: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:8080
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+      DB_TRANSPORT_NAME: ${DB_TRANSPORT_NAME}
+    networks:
+      - ams-project-identity
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 80
+
+volumes:
+  profilePictures: {}
+
+
+networks:
+  ams-project-identity:
+    external: true

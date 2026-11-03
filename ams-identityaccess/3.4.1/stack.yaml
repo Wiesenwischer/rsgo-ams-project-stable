@@ -1,0 +1,140 @@
+# IdentityAccess ReadyStackGo Manifest
+# Identity Provider (IdentityServer / AdminPortal / ClientHub / EmailSender)
+#
+# Lives as its own RSGO product so operators can deploy / upgrade IdentityAccess
+# independently of the larger ams.project stack. The actual services are
+# declared in the identity-access.yaml fragment next to this file.
+
+metadata:
+  name: ams.identityaccess
+  productId: com.ams-erp.project.identityaccess
+  description: IdentityServer-based identity provider for AMS products
+  productVersion: "3.4.1"
+  author: ams solution GmbH
+  category: Identity
+  tags:
+    - ams
+    - identityaccess
+    - oauth2
+    - oidc
+
+sharedVariables:
+  # Network Configuration
+  AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP:
+    label: External DNS/IP
+    description: External DNS name or IP for accessing services
+    type: String
+    default: host.docker.internal
+    required: true
+    group: Network
+
+  # Database Configuration
+  DB_SERVER:
+    label: DB Server
+    description: SQL Server hostname or IP address (e.g., mssql, sql01.firma.local)
+    type: String
+    required: true
+    group: Database
+
+  DB_NAME:
+    label: DB Name
+    description: Database name (e.g., identity)
+    type: String
+    required: true
+    group: Database
+
+  DB_PARAMS:
+    label: DB Additional Parameters
+    description: Additional connection string parameters (e.g., Encrypt=false;TrustServerCertificate=true)
+    type: String
+    default: "Encrypt=false;TrustServerCertificate=true;Max Pool Size=100;MultipleActiveResultSets=true"
+    group: Database
+
+  DB_ADMIN_USER:
+    label: DB Admin User
+    description: SQL Server admin login for DDL migrations
+    type: String
+    default: projectadmin
+    required: true
+    group: Database
+
+  DB_ADMIN_PASSWORD:
+    label: DB Admin Password
+    description: SQL Server admin password for DDL migrations
+    type: Password
+    required: true
+    group: Database
+
+  DB_RUNTIME_USER:
+    label: DB Runtime User
+    description: SQL Server runtime login (least-privilege, used by services)
+    type: String
+    default: projectuser
+    required: true
+    group: Database
+
+  DB_RUNTIME_PASSWORD:
+    label: DB Runtime Password
+    description: SQL Server runtime password
+    type: Password
+    required: true
+    group: Database
+
+  DB_TRANSPORT_NAME:
+    label: Transport DB Name (optional)
+    description: Optional shared catalog for cross-context NServiceBus pub/sub. When set, only the shared dbo.SubscriptionRouting table lives here. Leave blank to run IdentityAccess self-contained in its own database.
+    type: String
+    required: false
+    group: Database
+
+  # Environment Configuration
+  CULTURE_CODE:
+    label: Culture Code
+    description: Default culture code for localization
+    type: String
+    default: de-DE
+    group: General
+
+  # Logging
+  LOG_LEVEL:
+    label: Log Level
+    description: Minimum log level for Serilog
+    type: Select
+    options:
+      - value: Verbose
+        label: Verbose
+      - value: Debug
+        label: Debug
+      - value: Information
+        label: Information
+      - value: Warning
+        label: Warning
+      - value: Error
+        label: Error
+      - value: Fatal
+        label: Fatal
+    default: Information
+    group: Logging
+
+  # Advanced
+  SERVICE_BUS_TIME_TO_WAIT_BEFORE_TRIGGERING_CIRCUIT_BREAKER:
+    label: Service Bus Circuit Breaker Timeout
+    description: Time in seconds before triggering circuit breaker
+    type: Number
+    default: "120"
+    group: Advanced
+
+  EXIT_ON_CRITICAL_ERROR:
+    label: Exit on Critical Error
+    description: Whether services should exit on critical errors
+    type: Boolean
+    default: "false"
+    group: Advanced
+
+stacks:
+  identity-access:
+    include: identity-access.yaml
+
+networks:
+  ams-project-identity:
+    driver: bridge
