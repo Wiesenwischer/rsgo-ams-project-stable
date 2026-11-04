@@ -1,0 +1,31 @@
+# PublicApi Context Fragment
+
+metadata:
+  name: PublicApi
+  description: Public Project API bounded context services
+
+services:
+  # Temporarily disabled
+  # publicapi:
+  #   image: amssolution/public-project-api:linux-latest-ci
+  #   containerName: publicapi
+  #   ports:
+  #     - "${PUBLIC_API_PORT}:80"
+  #   environment:
+  #     ASPNETCORE_URLS: http://0.0.0.0:80
+  #     ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+  #     ConnectionStrings__ams: ${AMS_DB}
+  #     InternalApi__BaseUrl: http://projectmanagement-api:8080
+  #     InternalApi__AccountingUrl: http://accounting-api:8080
+  #     InternalApi__MemoUrl: http://memo-api:8080
+  #     InternalApi__DiscussionUrl: http://discussions-api:8080
+  #     Serilog__MinimumLevel: ${LOG_LEVEL}
+  #   networks:
+  #     - ams-project-backend
+  #   restart: unless-stopped
+  #   healthCheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     startPeriod: 40s

@@ -1,0 +1,107 @@
+# CapacityPlanning Context Fragment
+
+metadata:
+  name: CapacityPlanning
+  description: Capacity Planning bounded context services
+
+services:
+  capacityplanning-migrator:
+    image: amssolution/capacityplanning.migrator:linux-v4.0.0
+    containerName: capacityplanning-migrator
+    lifecycle: init
+    environment:
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_ADMIN_USER: ${DB_ADMIN_USER}
+      DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+    networks:
+      - ams-project-backend
+
+  capacityplanning-api:
+    image: amssolution/capacityplanning.api:linux-v4.0.0
+    containerName: capacityplanning-api
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 8080
+      test: ["CMD", "curl", "-f", "http://localhost:8080/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+  capacityplanning-readmodelgenerator:
+    image: amssolution/capacityplanning.readmodelgenerator:linux-v4.0.0
+    containerName: capacityplanning-readmodelgenerator
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      QUEUE_PEEKER_DELAY_MS: "1000"
+      CapacityPlanning__ActualHours__SelfHealingEnabled: ${CAPACITYPLANNING_ACTUALHOURS_SELFHEALING}
+      # SPEC-125 R34: off unless the operator says so; without a value the code default is off as well.
+      CapacityPlanning__ActualHours__AutomaticRedistribution__Enabled: ${CAPACITYPLANNING_ACTUALHOURS_AUTOMATIC_REDISTRIBUTION}
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 8080
+      test: ["CMD", "curl", "-f", "http://localhost:8080/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+  # PLAN-075: combined booking dialog MFE (Iststunden + Fertigstellung % + Fkennung)
+  capacityplanning-web:
+    image: amssolution/capacityplanning-web:linux-v4.0.0
+    containerName: capacityplanning-web
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      NEXT_PUBLIC_API_BASE_URL: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${BFF_PORT}
+      BFF_INTERNAL_URL: http://web-bff:8080
+      HOSTNAME: "0.0.0.0"
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /capacityplanning/hc
+      port: 80
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/capacityplanning/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+
+networks:
+  ams-project-backend:
+    external: true

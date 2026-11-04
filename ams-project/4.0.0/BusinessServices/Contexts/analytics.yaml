@@ -1,0 +1,94 @@
+# Analytics Context Fragment
+
+metadata:
+  name: Analytics
+  description: Analytics bounded context services
+
+services:
+  # PLAN-130: Deployt die capa-Schicht der Kapazitätsplanung (Schema, Tabellen, Views, TVFs,
+  # Prozeduren, Change Tracking) in die ERP-Datenbank und provisioniert die Rolle
+  # _analytics_user_role. One-Shot-Init-Container.
+  #
+  # Setzt eine EINGERICHTETE ERP-Datenbank voraus: die capa-Views lesen dbo.SPAD050 & Co., und
+  # CREATE VIEW kennt keine Deferred Name Resolution — gegen eine leere Datenbank bricht der
+  # Migrator bei 040_vw_quelle_grob.sql ab. Er ist kein Bootstrap, sondern läuft nach dem
+  # ERP-Schema-Setup.
+  #
+  # Anders als analytics-web braucht er DB_ADMIN_*: er ändert Datenbank-Einstellungen
+  # (SET CHANGE_TRACKING) und legt einen DB-weiten DDL-Trigger an. DB_NAME_TRANSPORT ist
+  # Pflicht, obwohl dieser Context keine Queues hat — der Migrations-Building-Block komponiert
+  # beide Connection-Strings und verweigert sonst den Start.
+  analytics-migrator:
+    image: amssolution/analytics.migrator:linux-v4.0.0
+    containerName: analytics-migrator
+    lifecycle: init
+    environment:
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_ADMIN_USER: ${DB_ADMIN_USER}
+      DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      # PLAN-136 — Demo-Daten-Schreiber, bewusst OPTIONAL.
+      #
+      # Sind die beiden Werte leer, legt der Migrator weder Login noch Rolle an und protokolliert
+      # das nur ("Runtime user provisioning skipped for '_analytics_demo_role'"). Genau so bleibt
+      # eine Live-Umgebung frei davon — die Variablen werden ausschliesslich auf Testsystemen
+      # befuellt. Der erste Runtime-User ist davon unberuehrt.
+      DB_DEMO_USER: ${DB_DEMO_USER}
+      DB_DEMO_PASSWORD: ${DB_DEMO_PASSWORD}
+    networks:
+      - ams-project-backend
+
+  analytics-web:
+    image: amssolution/analytics-web:linux-v4.0.0
+    containerName: analytics-web
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      NEXT_PUBLIC_API_BASE_URL: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${BFF_PORT}
+      BFF_INTERNAL_URL: http://web-bff:8080
+      HOSTNAME: "0.0.0.0"
+      # Analytics ist read-only DB-Consumer (keine NSB-Queues) — nur
+      # DB_NAME_PERSISTENCE durchreichen; kein TRANSPORT, kein ERP, keine
+      # Admin-Credentials. libraries/db.ts ruft dbConfig.buildAmsDbFromParts
+      # auf und komponiert daraus den Connection-String — read-only-Pendant
+      # zum C#-Building-Block Database.Configuration.AddDatabaseConnectionStrings(),
+      # den projectmanagement.yaml / salesorders.yaml etc. ebenfalls nutzen.
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      DB_PARAMS: ${DB_PARAMS}
+      # PLAN-136 — Demo-Daten-Generator (/demo-daten). Drei Huerden, zwei davon stehen hier:
+      #
+      #   1. Das Flag entscheidet, ob es die Seite ueberhaupt gibt. Nur der exakte Wert "true"
+      #      zaehlt; alles andere (auch "1" oder "yes") laesst das Feature aus.
+      #   2. Die Zugangsdaten sind der EINZIGE Schreibzugang der analytics-web. Fehlen sie, kann
+      #      selbst ein versehentlich gesetztes Flag nichts anrichten — die Route antwortet 503.
+      #
+      # Die dritte Huerde ist die Tippbestaetigung des Datenbanknamens in der Oberflaeche.
+      #
+      # AUF LIVE-UMGEBUNGEN BLEIBEN ALLE DREI LEER. Das ist kein Versaeumnis, sondern die
+      # Konfiguration: ohne sie existiert die Funktion dort nicht.
+      ANALYTICS_DEMO_DATA_ENABLED: ${ANALYTICS_DEMO_DATA_ENABLED}
+      ANALYTICS_DEMO_DB_USER: ${ANALYTICS_DEMO_DB_USER}
+      ANALYTICS_DEMO_DB_PASSWORD: ${ANALYTICS_DEMO_DB_PASSWORD}
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /analytics/hc
+      port: 3000
+      test: ["CMD", "curl", "-f", "http://localhost:3000/analytics/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+
+networks:
+  ams-project-backend:
+    external: true

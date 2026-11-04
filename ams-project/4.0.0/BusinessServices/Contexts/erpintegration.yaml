@@ -1,0 +1,213 @@
+# ErpIntegration Context Fragment
+
+metadata:
+  name: ErpIntegration
+  description: ERP Integration bounded context services
+
+services:
+  erpintegration-migrator:
+    image: amssolution/erpintegration.migrator:linux-v4.0.0
+    containerName: erpintegration-migrator
+    lifecycle: init
+    environment:
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_ADMIN_USER: ${DB_ADMIN_USER}
+      DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+    networks:
+      - ams-project-backend
+
+  erpintegration-gateway:
+    image: amssolution/erpintegration.gateway:linux-v4.0.0
+    containerName: erpintegration-gateway
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_NAME_ERP: ${DB_NAME_ERP}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      ServiceBusTimeToWaitBeforeTriggeringCircuitBreaker: ${SERVICE_BUS_TIME_TO_WAIT_BEFORE_TRIGGERING_CIRCUIT_BREAKER}
+      ExitOnCriticalError: ${EXIT_ON_CRITICAL_ERROR}
+      QUEUE_PEEKER_DELAY_MS: "1000"
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 8080
+      test: ["CMD", "curl", "-f", "http://localhost:8080/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+  wage-data-api:
+    image: amssolution/wage.wagedata.api:linux-v4.0.0
+    containerName: wage-data-api
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_NAME_ERP: ${DB_NAME_ERP}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      ServiceBusTimeToWaitBeforeTriggeringCircuitBreaker: ${SERVICE_BUS_TIME_TO_WAIT_BEFORE_TRIGGERING_CIRCUIT_BREAKER}
+      ExitOnCriticalError: ${EXIT_ON_CRITICAL_ERROR}
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 8080
+      test: ["CMD", "curl", "-f", "http://localhost:8080/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+  # PLAN-054 — server-side ERP plan-vs-actual sync evaluator. Subscribes to
+  # ErpTaskPlanned + NewProjectScheduleAvailable from PM and to the 8 *Changed
+  # events from erpintegration-gateway. Maintains TaskErpAlignment aggregates
+  # (own PlanAlignment schema) and publishes TaskErpSyncStatusChanged on every
+  # flip. Worker-only (no API surface) — the integration event is consumed by
+  # TaskContext.Worker which projects IsErpInSync into TaskDetailsView.
+  erpintegration-planalignment-worker:
+    image: amssolution/erpintegration.planalignment.worker:linux-v4.0.0
+    containerName: erpintegration-planalignment-worker
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      ServiceBusTimeToWaitBeforeTriggeringCircuitBreaker: ${SERVICE_BUS_TIME_TO_WAIT_BEFORE_TRIGGERING_CIRCUIT_BREAKER}
+      ExitOnCriticalError: ${EXIT_ON_CRITICAL_ERROR}
+      # PlanAlignment is event-bursty (bootstrap fans out 1000+ *Changed events
+      # at once on first start) — keep the peeker delay UI-responsive (100ms,
+      # the EndpointConfigurationBase default) so the cold-start queue drains
+      # in seconds rather than the ~17 minutes the 1000ms-default would need.
+      QUEUE_PEEKER_DELAY_MS: "100"
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+      # PLAN-095 — the worker now also hosts the per-project ERP-date hub + REST
+      # ([Authorize]); JWT-Bearer via the BFF cookie, mirroring referencedisplay-api.
+      Auth__Authority: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${IDENTITY_SERVER_PORT}
+      Auth__Audience: api://erpintegration
+      Auth__RequireHttpsMetadata: "${Authentication__RequireHttpsMetadata:-false}"
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 8080
+      test: ["CMD", "curl", "-f", "http://localhost:8080/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+  # PLAN-107 — read-only ams.erp lookup host (employees/business-units/
+  # resources + order filters), relocated from the retired collaboration-api.
+  # Served via the BFF under /api/erp-integration/{employees,business-units,
+  # resources,order-filters}. ConnectionStrings:ams = DB_NAME_PERSISTENCE (the
+  # main ams DB that also holds the ams.erp lookup tables). No NServiceBus.
+  erpintegration-api:
+    image: amssolution/erpintegration.api:linux-v4.0.0
+    containerName: erpintegration-api
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      Auth__Authority: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${IDENTITY_SERVER_PORT}
+      Auth__Audience: api://erpintegration
+      # Authority is reached over internal HTTP behind the reverse proxy, so
+      # HTTPS-metadata validation must stay off unless the stack is fronted by
+      # HTTPS. Shares the platform-wide Authentication__RequireHttpsMetadata knob.
+      Auth__RequireHttpsMetadata: "${Authentication__RequireHttpsMetadata:-false}"
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 8080
+      test: ["CMD", "curl", "-f", "http://localhost:8080/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+  # PLAN-053 — REST /references/expand + SignalR /signalr/labels for live
+  # ERP-record labels in TaskContext-Web. Subscribes to the 9 *Changed events
+  # from erpintegration-gateway and projects them into the ErpRecordLabel
+  # aggregate (own ReferenceDisplay schema in DB_NAME_PERSISTENCE).
+  erpintegration-referencedisplay-api:
+    image: amssolution/erpintegration.referencedisplay.api:linux-v4.0.0
+    containerName: erpintegration-referencedisplay-api
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      Auth__Authority: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${IDENTITY_SERVER_PORT}
+      Auth__Audience: api://erpintegration
+      # Authority is reached over internal HTTP behind the reverse proxy, so
+      # HTTPS-metadata validation must stay off unless the stack is fronted by
+      # HTTPS. Shares the platform-wide Authentication__RequireHttpsMetadata
+      # knob; explicit :-false fallback because RSGO does not always honour the
+      # variable default when no user-override is set.
+      Auth__RequireHttpsMetadata: "${Authentication__RequireHttpsMetadata:-false}"
+      # `${VAR:-default}` fallback because RSGO does not always honour the
+      # stack.yaml `default:` when an empty user-override is present. The
+      # demo/0001 fallbacks match the ams.erp demo dataset; operators can
+      # still set ERP_SYSTEM_ALIAS / ERP_CLIENT_ALIAS to override.
+      Erp__SystemAlias: ${ERP_SYSTEM_ALIAS:-demo}
+      Erp__ClientAlias: ${ERP_CLIENT_ALIAS:-0001}
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 8080
+      test: ["CMD", "curl", "-f", "http://localhost:8080/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+
+networks:
+  ams-project-backend:
+    external: true

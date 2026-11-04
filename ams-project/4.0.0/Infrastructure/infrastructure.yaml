@@ -1,0 +1,141 @@
+# Infrastructure Stack Fragment
+# Shared infrastructure components (EventStore, Redis)
+
+metadata:
+  name: Infrastructure
+  description: Shared infrastructure services (EventStore, EventStoreDB, Redis)
+
+variables:
+  # EventStore Legacy (v5)
+  EVENTSTORE_HTTP_PORT:
+    label: EventStore HTTP Port
+    description: HTTP port for EventStore v5 admin UI
+    type: Port
+    default: "2113"
+    group: EventStore
+
+  EVENTSTORE_TCP_PORT:
+    label: EventStore TCP Port
+    description: TCP port for EventStore v5 connections
+    type: Port
+    default: "1113"
+    group: EventStore
+
+  # EventStoreDB (new)
+  EVENTSTOREDB_HTTP_PORT:
+    label: EventStoreDB HTTP Port
+    description: HTTP port for EventStoreDB admin UI
+    type: Port
+    default: "2114"
+    group: EventStoreDB
+
+  EVENTSTOREDB_TCP_PORT:
+    label: EventStoreDB TCP Port
+    description: TCP port for EventStoreDB connections
+    type: Port
+    default: "1114"
+    group: EventStoreDB
+
+  # Redis
+  REDIS_PORT:
+    label: Redis Port
+    description: Port for Redis cache
+    type: Port
+    default: "6379"
+    group: Redis
+
+services:
+  # EventStore v5 (Legacy)
+  eventstore:
+    image: eventstore/eventstore:release-5.0.11
+    containerName: eventstore
+    ports:
+      - "${EVENTSTORE_HTTP_PORT}:2113"
+      - "${EVENTSTORE_TCP_PORT}:1113"
+    environment:
+      EVENTSTORE_CLUSTER_SIZE: "1"
+      EVENTSTORE_RUN_PROJECTIONS: All
+      EVENTSTORE_START_STANDARD_PROJECTIONS: "true"
+      EVENTSTORE_INSECURE: "true"
+      EVENTSTORE_ENABLE_ATOM_PUB_OVER_HTTP: "true"
+    volumes:
+      - eventstore-data:/var/lib/eventstore
+    networks:
+      - ams-project-infra
+    restart: unless-stopped
+    labels:
+      rsgo.maintenance: ignore
+    healthCheck:
+      type: http
+      path: /stats
+      port: 2113
+      test: ["CMD-SHELL", "curl -s http://localhost:2113/stats || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      startPeriod: 60s
+
+  # EventStoreDB (New)
+  eventstore-db:
+    image: docker.eventstore.com/eventstore/eventstoredb-ee:latest
+    containerName: eventstore-db
+    ports:
+      - "${EVENTSTOREDB_HTTP_PORT}:2113"
+      - "${EVENTSTOREDB_TCP_PORT}:1113"
+    environment:
+      EVENTSTORE_CLUSTER_SIZE: "1"
+      EVENTSTORE_RUN_PROJECTIONS: All
+      EVENTSTORE_START_STANDARD_PROJECTIONS: "true"
+      EVENTSTORE_NODE_PORT: "2113"
+      EVENTSTORE_INSECURE: "true"
+      EVENTSTORE_ENABLE_ATOM_PUB_OVER_HTTP: "true"
+    volumes:
+      - eventstore-db-data:/var/lib/eventstore
+      - eventstore-db-logs:/var/log/eventstore
+    networks:
+      - ams-project-infra
+    restart: unless-stopped
+    labels:
+      rsgo.maintenance: ignore
+    healthCheck:
+      type: http
+      path: /stats
+      port: 2113
+      test: ["CMD-SHELL", "curl -s http://localhost:2113/stats || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      startPeriod: 60s
+
+  # Redis Cache
+  cachedata:
+    image: redis:alpine
+    containerName: cachedata
+    command: redis-server
+    ports:
+      - "${REDIS_PORT}:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - ams-project-infra
+    restart: unless-stopped
+    labels:
+      rsgo.maintenance: ignore
+    healthCheck:
+      type: tcp
+      port: 6379
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 30s
+
+volumes:
+  eventstore-data: {}
+  eventstore-db-data: {}
+  eventstore-db-logs: {}
+  redis-data: {}
+
+
+networks:
+  ams-project-infra:
+    external: true

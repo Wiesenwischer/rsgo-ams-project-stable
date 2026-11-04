@@ -1,0 +1,370 @@
+# Platform Stack Fragment
+# Core platform services (Web BFF, Desktop Gateways, Admin Portal)
+
+metadata:
+  name: Platform
+  description: Platform services (Web BFF, Desktop API Gateway, Composition Gateway, Admin Portal)
+
+variables:
+  Authentication__RequireHttpsMetadata:
+    label: Require HTTPS Metadata
+    description: Whether to require HTTPS for OIDC metadata
+    type: Boolean
+    default: "false"
+    group: Authentication
+
+  Authentication__EnableWebLogin:
+    label: Enable Web Login
+    description: Enable web-based login flow
+    type: Boolean
+    default: "true"
+    group: Authentication
+
+  # Redis Connection
+  REDIS_CONNECTION:
+    label: Redis Connection
+    description: Redis connection string for session cache
+    type: String
+    default: cachedata:6379
+    group: Cache
+
+  # EventStore v5 TCP port — re-declared in the Platform fragment (like REDIS_CONNECTION)
+  # so the ClientConfigDefaults__EventStoreUrl seed below resolves it. The actual port
+  # mapping is owned by the Infrastructure fragment (infrastructure.yaml EVENTSTORE_TCP_PORT).
+  # Without this declaration the placeholder rendered empty, seeding the desktop with
+  # "tcp://...:" (no port) — the EventStore catch-up subscription then never connects and
+  # the WPF schedule hangs on "Ladevorgang läuft...".
+  EVENTSTORE_TCP_PORT:
+    label: EventStore TCP Port
+    description: External TCP port of EventStore v5 used by the desktop client connection
+    type: Port
+    default: "1113"
+    group: EventStore
+
+  # Error-queue management (PLAN-117): read path is always on; retry/discard are opt-in per
+  # environment so an operator consciously enables mutating the shared error queue.
+  ErrorQueue__MutationsEnabled:
+    label: Error Queue Mutations Enabled
+    description: Allow retry/discard of failed messages in the Platform-Admin error queue
+    type: Boolean
+    default: "false"
+    group: Operations
+
+services:
+  web-bff:
+    image: amssolution/web.bff:linux-v4.0.0
+    containerName: web-bff
+    # PLAN-114 cutover: no public host port — the RSGO-managed maintenance edge (see stack.yaml `edge:`)
+    # is the public front-door and reaches the BFF internally as `web-bff:8080` over `ams-project-edge`.
+    # The edge binds the public ${BFF_PORT}; clients keep WebBffUrl http://<dns>:${BFF_PORT} unchanged.
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      IdentityProvider__ActiveProvider: oidc
+      IdentityProvider__Providers__oidc__Type: oidc
+      IdentityProvider__Providers__oidc__ActiveProfile: default
+      IdentityProvider__OidcProfiles__default__Authority: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${IDENTITY_SERVER_PORT}
+      IdentityProvider__OidcProfiles__default__ClientId: web-bff
+      IdentityProvider__OidcProfiles__default__ClientSecret: web-bff-secret
+      IdentityProvider__OidcProfiles__default__RequireHttpsMetadata: "${Authentication__RequireHttpsMetadata}"
+      IdentityProvider__OidcProfiles__default__EnableWebLogin: "${Authentication__EnableWebLogin}"
+      IdentityProvider__OidcProfiles__default__RedirectUri: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${BFF_PORT}/signin-oidc
+      IdentityProvider__OidcProfiles__default__PostLogoutRedirectUri: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${BFF_PORT}/
+      IdentityProvider__OidcProfiles__default__ResponseMode: query
+      IdentityProvider__OidcProfiles__default__Scopes__0: openid
+      IdentityProvider__OidcProfiles__default__Scopes__1: profile
+      IdentityProvider__OidcProfiles__default__Scopes__2: email
+      IdentityProvider__OidcProfiles__default__Scopes__3: offline_access
+      ConnectionStrings__cache: ${REDIS_CONNECTION}
+      # SPEC-066 Part B: persist BFF session tokens in Redis instead of the
+      # process-local IMemoryCache. The InMemory vault loses every session on a
+      # BFF redeploy AND on IMemoryCache TTL/eviction while idle, which surfaces
+      # to users as "Projekt konnte nicht geöffnet werden — Sitzung abgelaufen"
+      # (BFF log: "Token vault entry not found for session ..."). Redis
+      # (cachedata:6379) already runs and web-bff is on the same network.
+      # DP keys persist (web-bff-dataprotection volume) so ProtectedTokenVault
+      # can still decrypt Redis-stored tokens after a restart.
+      TokenVault__Provider: Redis
+      TokenVault__Redis__ConnectionString: ${REDIS_CONNECTION}
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      BackendServices__ProjectManagement__BaseUrl: http://projectmanagement-api:8080
+      BackendServices__Export__BaseUrl: http://export-api:8080
+      BackendServices__Memo__BaseUrl: http://memo-api:8080
+      BackendServices__Discussions__BaseUrl: http://discussions-api:8080
+      BackendServices__Sales__BaseUrl: http://salesorders-api:8080
+      BackendServices__ProductionPlanning__BaseUrl: http://bom-api:8080
+      BackendServices__OrganizationsAccess__BaseUrl: http://organizationsaccess-api:8080
+      ReverseProxy__Clusters__projectmanagement-cluster__Destinations__destination1__Address: http://projectmanagement-api:8080/
+      ReverseProxy__Clusters__export-cluster__Destinations__destination1__Address: http://export-api:8080/
+      ReverseProxy__Clusters__memo-cluster__Destinations__destination1__Address: http://memo-api:8080/
+      ReverseProxy__Clusters__discussions-cluster__Destinations__destination1__Address: http://discussions-api:8080/
+      ReverseProxy__Clusters__production-cluster__Destinations__destination1__Address: http://bom-api:8080/
+      ReverseProxy__Clusters__projectmanagement-web-cluster__Destinations__destination1__Address: http://projectmanagement-web:3000/
+      ReverseProxy__Clusters__memo-web-cluster__Destinations__destination1__Address: http://memo-web:3000/
+      ReverseProxy__Clusters__discussions-web-cluster__Destinations__destination1__Address: http://discussions-web:3000/
+      ReverseProxy__Clusters__export-web-cluster__Destinations__destination1__Address: http://export-web:3000/
+      ReverseProxy__Clusters__sales-cluster__Destinations__destination1__Address: http://salesorders-api:8080/
+      ReverseProxy__Clusters__erprefs-web-cluster__Destinations__destination1__Address: http://erprefs-web:3000/
+      ReverseProxy__Clusters__analytics-web-cluster__Destinations__destination1__Address: http://analytics-web:3000/
+      ReverseProxy__Clusters__capacityplanning-web-cluster__Destinations__destination1__Address: http://capacityplanning-web:80/
+      ReverseProxy__Clusters__capacityplanning-api-cluster__Destinations__destination1__Address: http://capacityplanning-api:8080/
+      ReverseProxy__Clusters__organizationsaccess-cluster__Destinations__destination1__Address: http://organizationsaccess-api:8080/
+      ReverseProxy__Clusters__admin-api-cluster__Destinations__destination1__Address: http://platform-api:8080/
+      ReverseProxy__Clusters__admin-api-cluster__Metadata__Audience: ams
+      ReverseProxy__Clusters__admin-web-cluster__Destinations__destination1__Address: http://admin-web:3000/
+      ReverseProxy__Clusters__customer-docs-cluster__Destinations__destination1__Address: http://customer-docs:80/
+      ReverseProxy__Clusters__configuration-api-cluster__Destinations__destination1__Address: http://platform-api:8080/
+      ReverseProxy__Clusters__configuration-admin-cluster__Destinations__destination1__Address: http://platform-api:8080/
+      ReverseProxy__Clusters__scheduleview-cluster__Destinations__destination1__Address: http://projectmanagement-scheduleview-api:8080/
+      BackendServices__Admin__BaseUrl: http://platform-api:8080
+      Cors__AllowedOrigins__0: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${BFF_PORT}
+      Cors__AllowedOrigins__1: http://localhost:3000
+      Cors__AllowedOrigins__2: http://localhost:7716
+      Cors__AllowedOrigins__3: http://host.docker.internal:5000
+      JwtValidation__Authorities__0: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${IDENTITY_SERVER_PORT}
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+      SessionCookie__Secure: "false"
+      SessionCookie__SameSite: Lax
+      SessionCookie__HttpOnly: "false"
+      DataProtection__ApplicationName: WebBff
+      DataProtection__PersistKeysToFileSystem: /app/data-protection-keys
+    volumes:
+      - web-bff-dataprotection:/app/data-protection-keys
+    networks:
+      - ams-project-backend
+      - ams-project-infra
+      - ams-project-edge
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 8080
+      test: ["CMD", "curl", "-f", "http://localhost:8080/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+  desktopschedulingapigw:
+    image: amssolution/desktopschedulingapigw:linux-v4.0.0
+    containerName: desktopschedulingapigw
+    ports:
+      - "5200:8080"
+      - "15200:9901"
+    environment:
+      ENVOY_UID: "0"
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /ready
+      port: 9901
+      test: ["CMD-SHELL", "curl -sf http://localhost:9901/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 30s
+
+  desktopprojectplanningcomposition:
+    image: amssolution/desktop.projectplanning.compositiongateway:linux-v4.0.0
+    containerName: desktopprojectplanningcomposition
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      Urls__ProjectManagement: http://projectmanagement-api:8080
+      Urls__SalesOrders: http://salesorders-api:8080
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 8080
+      test: ["CMD", "curl", "-f", "http://localhost:8080/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+  # Admin Portal Services
+  platform-migrator:
+    image: amssolution/platform.migrator:linux-v4.0.0
+    containerName: platform-migrator
+    lifecycle: init
+    environment:
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_ADMIN_USER: ${DB_ADMIN_USER}
+      DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      # Recovery admin: seeded as a Pending grant at deploy time so it survives reinstall/handover
+      # and binds to the IdP subject on first login (SPEC-080 v2 / PLAN-112).
+      Admin__InitialAdminEmail: ${ADMIN_INITIAL_EMAIL}
+    networks:
+      - ams-project-backend
+
+  # Consolidated platform-administration host (SPEC-081/PLAN-106): replaces the former
+  # admin-api + configuration-api. Hosts the admin endpoints (FeatureFlags/Administrators/
+  # AuditLog, behind the Admin policy) AND the configuration store (anonymous client
+  # bootstrap GET /api/config/bootstrap + admin write path). Schema is provisioned by
+  # platform-migrator (lifecycle: init), which therefore runs first.
+  platform-api:
+    image: amssolution/platform.api:linux-v4.0.0
+    containerName: platform-api
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      # Transport DB hosts the NServiceBus error queue ([dbo].[error]) for the error-queue
+      # management feature (PLAN-117). Composes ConnectionStrings:Transport via the building block.
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      # Error-queue retry/discard gate (PLAN-117); read path stays on regardless.
+      ErrorQueue__MutationsEnabled: "${ErrorQueue__MutationsEnabled}"
+      JwtValidation__Authorities__0: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${IDENTITY_SERVER_PORT}
+      Authentication__Authority: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${IDENTITY_SERVER_PORT}
+      JwtBearer__Authority: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${IDENTITY_SERVER_PORT}
+      JwtBearer__RequireHttpsMetadata: "false"
+      JwtBearer__ValidateIssuerSigningKey: "false"
+      Admin__InitialAdminEmail: ${ADMIN_INITIAL_EMAIL}
+      # LOG_LEVEL carries Serilog level names (incl. "Fatal"). platform-api now uses
+      # the shared Serilog stack, so drive it via Serilog__MinimumLevel only. Do NOT
+      # map it to Logging__LogLevel__Default — MEL's LogLevel enum has no "Fatal" and
+      # would crash-loop the service on the default value.
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+      # Per-environment defaults for the client configuration store (SPEC-079). These pre-populate
+      # the deployment-topology URLs so an operator does not have to type them in the admin portal;
+      # a stored value (admin edit) always wins, these are only the non-stored fallback.
+      ClientConfigDefaults__WebBffUrl: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${BFF_PORT}
+      ClientConfigDefaults__PlanningGatewayUrl: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:5200
+      ClientConfigDefaults__EventStoreUrl: tcp://admin:changeit@${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${EVENTSTORE_TCP_PORT}
+      # Client-share deployment (PLAN-111): the auth-gated admin endpoint delegates the actual
+      # SMB write to the ams-installer container over the internal backend network. The installer
+      # must additionally be allowed OUTBOUND TCP 445 to the customer file server (network/firewall).
+      ClientInstaller__InternalBaseUrl: http://ams-installer:8080
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 8080
+      test: ["CMD", "curl", "-f", "http://localhost:8080/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+  admin-web:
+    image: amssolution/admin-web:linux-v4.0.0
+    containerName: admin-web
+    environment:
+      NODE_ENV: ${NODE_ENV}
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: tcp
+      port: 3000
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 20s
+
+  # Client/agent provisioning hub (PLAN-095) + internal client-share deployer (PLAN-111).
+  # Deployed with the platform stack so an RSGO deploy brings it up alongside web-bff/platform-api
+  # — previously it lived only in a standalone docker-compose project, which left ams-installer
+  # absent after a plain RSGO redeploy and broke /admin/client-deploy with a socket error.
+  #   - web-bff routes /installer/** here (YARP cluster ams-installer-cluster → http://ams-installer:8080).
+  #   - platform-api delegates the auth-gated client-share write to POST /internal/client-deployment here.
+  #   - reads the release gate from platform-api (http://platform-api:8080/api/config/release-status).
+  # The runtime bundle (ProjectDesktop/Dashboards/RDL + agent.exe) is baked into the image by installer-ci;
+  # therefore no /artifacts volume. The installer must additionally be allowed OUTBOUND TCP 445 to the
+  # customer file server (network/firewall) for the SMB write.
+  ams-installer:
+    image: amssolution/ams.installer.container:linux-v4.0.0
+    containerName: ams-installer
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      Artifacts__Root: /artifacts
+      # LOG_LEVEL carries Serilog level names (incl. "Fatal"). ams-installer now uses
+      # the shared Serilog stack, so drive it via Serilog__MinimumLevel — not
+      # Logging__LogLevel__Default (MEL has no "Fatal" and would crash-loop it).
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+      # Hub page pre-fills the externally reachable container URL from these; both optional
+      # (the container starts and the client-share path works without them).
+      AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP: ${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}
+      BFF_PORT: ${BFF_PORT}
+      # Mandantennummer: NICHT mehr aus ERP_CLIENT_ALIAS — der Installer liest sie seit PLAN-123
+      # fail-closed aus dem Config-Store (platform-api GET /api/config/bootstrap →
+      # Planning.DashBoardView.Mandant.Number). Die Stack-Variable ERP_CLIENT_ALIAS bleibt für
+      # ErpIntegration (ams://-Alias, erpintegration.yaml) und wird hier nicht mehr durchgereicht.
+      # The SQL connection for the agent-config prefill is composed in-app from these DB_*
+      # fields via the shared Database.Configuration building block (ConnectionStrings:ams) —
+      # same as every other platform service, no pre-baked composite connection string.
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    # The aspnet:9.0 base image has no curl/wget, so an http-type check (curl test) cannot run
+    # in-container — use a tcp dial like admin-web. ASP.NET binds 8080 once it is ready.
+    healthCheck:
+      type: tcp
+      port: 8080
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+  # Customer Documentation Portal — static Docusaurus site (nginx).
+  # Reachable via the BFF route /docs without authentication.
+  customer-docs:
+    image: amssolution/customer-docs:linux-v4.0.0
+    containerName: customer-docs
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 80
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 20s
+
+volumes:
+  web-bff-dataprotection: {}
+
+
+networks:
+  ams-project-backend:
+    external: true
+  ams-project-infra:
+    external: true
+  # PLAN-114: shared external network between the RSGO-managed maintenance edge and the BFF.
+  # RSGO ensures external networks exist and never deletes them, so it survives product redeploys.
+  ams-project-edge:
+    external: true

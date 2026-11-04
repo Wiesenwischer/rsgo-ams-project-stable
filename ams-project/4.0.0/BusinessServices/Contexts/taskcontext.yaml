@@ -1,0 +1,128 @@
+# TaskContext Bounded Context Fragment (PLAN-039 + PLAN-041 + PLAN-046)
+#
+# Hosts the read-model API, the messaging endpoint (TaskContext.Worker, PLAN-046)
+# that materialises integration events from ProjectManagement + Tracking into
+# the TaskContext read-model, AND the Next.js standalone frontend that the BFF
+# reverse-proxies under /taskcontext/* (PLAN-041 React migration).
+
+metadata:
+  name: TaskContext
+  description: TaskContext read-model API + Next.js web shell
+
+services:
+  taskcontext-migrator:
+    image: amssolution/taskcontext.migrator:linux-v4.0.0
+    containerName: taskcontext-migrator
+    lifecycle: init
+    environment:
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_ADMIN_USER: ${DB_ADMIN_USER}
+      DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      CREATE_DATABASE: "true"
+      CHECK_QUEUES: "false"
+    networks:
+      - ams-project-backend
+
+  taskcontext-api:
+    image: amssolution/taskcontext.api:linux-v4.0.0
+    containerName: taskcontext-api
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      ConnectionStrings__TaskContext: "Server=${DB_SERVER};Database=${DB_NAME_PERSISTENCE};User Id=${DB_RUNTIME_USER};Password=${DB_RUNTIME_PASSWORD};${DB_PARAMS}"
+      ConnectionStrings__Transport: "Server=${DB_SERVER};Database=${DB_NAME_TRANSPORT};User Id=${DB_RUNTIME_USER};Password=${DB_RUNTIME_PASSWORD};${DB_PARAMS}"
+      ConnectionStrings__Persistence: "Server=${DB_SERVER};Database=${DB_NAME_PERSISTENCE};User Id=${DB_RUNTIME_USER};Password=${DB_RUNTIME_PASSWORD};${DB_PARAMS}"
+      Authentication__Authority: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${IDENTITY_SERVER_PORT}
+      Authentication__Audience: api://taskcontext
+      # Authority is reached over internal HTTP behind the reverse proxy, so
+      # HTTPS-metadata validation must stay off unless the stack is fronted by
+      # HTTPS. Shares the platform-wide Authentication__RequireHttpsMetadata
+      # knob; explicit :-false fallback because RSGO does not always honour the
+      # variable default when no user-override is set.
+      Authentication__RequireHttpsMetadata: "${Authentication__RequireHttpsMetadata:-false}"
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 8080
+      test: ["CMD", "curl", "-f", "http://localhost:8080/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+  taskcontext-worker:
+    # PLAN-046 — NServiceBus endpoint that materialises ProjectManagement and
+    # Tracking integration events into the TaskContext read-model. Without this
+    # container the read-model only ever holds the migrator-backfill snapshot;
+    # any project/task created after deploy never lands in TaskContext.
+    image: amssolution/taskcontext.worker:linux-v4.0.0
+    containerName: taskcontext-worker
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+      DB_SERVER: ${DB_SERVER}
+      DB_NAME_PERSISTENCE: ${DB_NAME_PERSISTENCE}
+      DB_NAME_TRANSPORT: ${DB_NAME_TRANSPORT}
+      DB_PARAMS: ${DB_PARAMS}
+      DB_RUNTIME_USER: ${DB_RUNTIME_USER}
+      DB_RUNTIME_PASSWORD: ${DB_RUNTIME_PASSWORD}
+      ConnectionStrings__TaskContext: "Server=${DB_SERVER};Database=${DB_NAME_PERSISTENCE};User Id=${DB_RUNTIME_USER};Password=${DB_RUNTIME_PASSWORD};${DB_PARAMS}"
+      ConnectionStrings__Transport: "Server=${DB_SERVER};Database=${DB_NAME_TRANSPORT};User Id=${DB_RUNTIME_USER};Password=${DB_RUNTIME_PASSWORD};${DB_PARAMS}"
+      ConnectionStrings__Persistence: "Server=${DB_SERVER};Database=${DB_NAME_PERSISTENCE};User Id=${DB_RUNTIME_USER};Password=${DB_RUNTIME_PASSWORD};${DB_PARAMS}"
+      Serilog__MinimumLevel: ${LOG_LEVEL}
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /hc
+      port: 8080
+      test: ["CMD", "curl", "-f", "http://localhost:8080/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 60s
+
+  taskcontext-web:
+    image: amssolution/taskcontext-web:linux-v4.0.0
+    containerName: taskcontext-web
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      NEXT_PUBLIC_API_BASE_URL: http://${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}:${BFF_PORT}
+      API_BASE_URL: http://taskcontext-api:8080
+    networks:
+      - ams-project-backend
+    restart: unless-stopped
+    healthCheck:
+      type: http
+      path: /taskcontext/hc
+      port: 3000
+      # Use 127.0.0.1 instead of localhost: on node:25-alpine `localhost` does
+      # not resolve inside the container, the wget probe got "connection refused"
+      # even though Next.js was listening on 0.0.0.0:3000.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/taskcontext/hc"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      startPeriod: 40s
+
+networks:
+  ams-project-backend:
+    external: true

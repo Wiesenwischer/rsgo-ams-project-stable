@@ -1,0 +1,436 @@
+# ams.project ReadyStackGo Manifest
+# Multi-Stack Product for ams Project Management System
+
+metadata:
+  name: ams.project
+  productId: com.ams-erp.project
+  description: Enterprise Project Management System with Infrastructure, Platform and Business Services
+  productVersion: "4.0.0"
+  author: ams solution GmbH
+  category: Enterprise
+  tags:
+    - ams
+    - project-management
+    - enterprise
+    - microservices
+
+sharedVariables:
+  # Network Configuration
+  AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP:
+    label: External DNS/IP
+    description: External DNS name or IP for accessing services
+    type: String
+    default: host.docker.internal
+    required: true
+    group: Network
+
+  IDENTITY_SERVER_PORT:
+    label: Identity Server Port
+    description: External port for IdentityServer (Authentication Authority)
+    type: Number
+    default: "7614"
+    group: Network
+
+  BFF_PORT:
+    label: BFF Port
+    description: External port for Backend-for-Frontend
+    type: Number
+    default: "5000"
+    group: Network
+
+
+  # Database Configuration
+  DB_SERVER:
+    label: DB Server
+    description: SQL Server hostname or IP address (e.g., mssql, sql01.firma.local)
+    type: String
+    required: true
+    group: Database
+
+  DB_NAME_PERSISTENCE:
+    label: Persistence DB Name
+    description: Database for service-owned data (e.g., ams_project)
+    type: String
+    required: true
+    group: Database
+
+  DB_NAME_TRANSPORT:
+    label: Transport DB Name
+    description: Database for NServiceBus message transport
+    type: String
+    required: true
+    group: Database
+
+  DB_NAME_ERP:
+    label: ERP DB Name
+    description: Database for ERP/legacy data (used by integration services only)
+    type: String
+    required: true
+    group: Database
+
+  DB_PARAMS:
+    label: DB Additional Parameters
+    description: Additional connection string parameters (e.g., Encrypt=false;TrustServerCertificate=true)
+    type: String
+    default: ""
+    group: Database
+
+  # Environment Configuration
+  ASPNETCORE_ENVIRONMENT:
+    label: ASP.NET Core Environment
+    description: Runtime environment for ASP.NET Core services
+    type: Select
+    options:
+      - value: Development
+        label: Development
+      - value: Staging
+        label: Staging
+      - value: Production
+        label: Production
+    default: Production
+    group: General
+
+  NODE_ENV:
+    label: Node Environment
+    description: Node.js environment for frontend services
+    type: Select
+    options:
+      - value: development
+        label: Development
+      - value: production
+        label: Production
+    default: production
+    group: General
+
+  CULTURE_CODE:
+    label: Culture Code
+    description: Default culture code for localization
+    type: String
+    default: de-DE
+    group: General
+
+  # Logging
+  LOG_LEVEL:
+    label: Log Level
+    description: Minimum log level for Serilog
+    type: Select
+    options:
+      - value: Verbose
+        label: Verbose
+      - value: Debug
+        label: Debug
+      - value: Information
+        label: Information
+      - value: Warning
+        label: Warning
+      - value: Error
+        label: Error
+      - value: Fatal
+        label: Fatal
+    default: Fatal
+    group: Logging
+
+  # Advanced
+  SERVICE_BUS_TIME_TO_WAIT_BEFORE_TRIGGERING_CIRCUIT_BREAKER:
+    label: Service Bus Circuit Breaker Timeout
+    description: Time in seconds before triggering circuit breaker
+    type: Number
+    default: "120"
+    group: Advanced
+
+  EXIT_ON_CRITICAL_ERROR:
+    label: Exit on Critical Error
+    description: Whether services should exit on critical errors
+    type: Boolean
+    default: "false"
+    group: Advanced
+
+  # ERP Tenant Aliases (PLAN-053)
+  # Used by ErpIntegration.ReferenceDisplay.Api to build
+  # ams://systemAlias/clientAlias/serviceName.tableAlias.{recordId} URLs.
+  ERP_SYSTEM_ALIAS:
+    label: ERP System Alias
+    description: "ams.erp system alias (first segment of ams:// URLs)."
+    type: String
+    default: demo
+    required: true
+    group: ERP
+
+  ERP_CLIENT_ALIAS:
+    label: ERP Client Alias
+    description: "ams.erp client/mandant alias (second segment of ams:// URLs)."
+    type: String
+    default: "0001"
+    required: true
+    group: ERP
+
+  # Database Credentials
+  DB_ADMIN_USER:
+    label: DB Admin User
+    description: "Optional: SQL Server admin login for DDL migrations. If not set, runtime credentials are used."
+    type: String
+    required: false
+    group: Database
+
+  DB_ADMIN_PASSWORD:
+    label: DB Admin Password
+    description: "Optional: SQL Server admin password for DDL migrations."
+    type: Password
+    required: false
+    group: Database
+
+  DB_RUNTIME_USER:
+    label: DB Runtime User
+    description: "Optional: SQL Server runtime login (least-privilege, created by migrator). If not set, admin credentials are used for all services."
+    type: String
+    required: false
+    group: Database
+
+  DB_RUNTIME_PASSWORD:
+    label: DB Runtime Password
+    description: "Optional: SQL Server runtime password."
+    type: Password
+    required: false
+    group: Database
+
+  # --- Demo-Daten (PLAN-136) ---------------------------------------------------------------
+  # Nur auf TESTSYSTEMEN befuellen. Alle drei leer zu lassen ist der Normalfall und die
+  # Konfiguration einer Live-Umgebung: dort existiert die Funktion dann nicht.
+  ANALYTICS_DEMO_DATA_ENABLED:
+    label: Analytics Demo-Daten freischalten
+    description: >-
+      Nur fuer Testsysteme. Schaltet die Seite /demo-daten frei, mit der sich die Beispieldaten
+      der Dokumentation anlegen und wieder entfernen lassen. Zusaetzlich muessen die beiden
+      folgenden Zugangsdaten gesetzt sein, sonst kann nichts geschrieben werden. Auf
+      Live-Umgebungen ausgeschaltet lassen.
+    type: Boolean
+    default: "false"
+    group: Database
+
+  ANALYTICS_DEMO_DB_USER:
+    label: Analytics Demo-Daten DB-Benutzer
+    description: >-
+      Nur fuer Testsysteme. Eigener SQL-Login des Demo-Daten-Generators (Rolle
+      _analytics_demo_role, angelegt vom analytics-migrator aus DB_DEMO_USER). Er besitzt SELECT,
+      INSERT und DELETE auf elf Tabellen und ist der einzige Schreibzugang der analytics-web.
+      Leer lassen heisst: kein Schreibzugang, auch bei gesetztem Flag.
+    type: String
+    required: false
+    group: Database
+
+  ANALYTICS_DEMO_DB_PASSWORD:
+    label: Analytics Demo-Daten DB-Passwort
+    description: "Nur fuer Testsysteme. Passwort zu ANALYTICS_DEMO_DB_USER."
+    type: Password
+    required: false
+    group: Database
+
+  DB_DEMO_USER:
+    label: DB Demo Provisioning User
+    description: >-
+      Nur fuer Testsysteme. Login, den der analytics-migrator fuer den Demo-Daten-Generator
+      ANLEGT. Ueblicherweise derselbe Wert wie ANALYTICS_DEMO_DB_USER: der Migrator legt ihn an,
+      die analytics-web meldet sich damit an. Ist das Feld leer, entsteht weder Login noch Rolle.
+    type: String
+    required: false
+    group: Database
+
+  DB_DEMO_PASSWORD:
+    label: DB Demo Provisioning Password
+    description: "Nur fuer Testsysteme. Passwort zu DB_DEMO_USER, identisch zu ANALYTICS_DEMO_DB_PASSWORD."
+    type: Password
+    required: false
+    group: Database
+
+  # Admin Portal
+  ADMIN_INITIAL_EMAIL:
+    label: Initial Admin Email
+    description: >-
+      E-mail of the initial platform administrator. On a fresh installation the first
+      user who signs in (via any configured IdP) with exactly this e-mail is promoted
+      to platform admin. Leave empty to disable the auto-bootstrap.
+    type: Email
+    default: ""
+    group: Admin
+
+  # Infrastructure Connections (previously in business-services stack)
+  EVENTSTORE_DB:
+    label: EventStoreDB Connection (gRPC)
+    description: EventStoreDB gRPC connection string for discussions (esdb:// protocol)
+    type: EventStoreConnectionString
+    default: "esdb://admin:changeit@eventstore-db:2113?tls=false&tlsVerifyCert=false"
+    group: EventStore
+
+  EVENTSTORE_TCP:
+    label: EventStore Connection (TCP)
+    description: EventStore v5 TCP connection string for projectmanagement services
+    type: String
+    default: "tcp://admin:changeit@eventstore:1113"
+    group: EventStore
+
+  REDIS_CONNECTION:
+    label: Redis Connection
+    description: Redis connection string
+    type: String
+    default: cachedata:6379
+    group: Cache
+
+  # Service Ports
+  PUBLIC_API_PORT:
+    label: Public API Port
+    description: Port for Public Project API
+    type: Port
+    default: "7716"
+    group: Network
+
+  PROJECT_IMPORT_PORT:
+    label: Project Import Port
+    description: Port for Project Import API
+    type: Port
+    default: "7717"
+    group: Network
+
+  # Demo / Handbook
+  SEED_HANDBOOK_EXAMPLES:
+    label: Seed Handbook Example Projects
+    description: >
+      When true, the ProjectManagement worker creates the handbook demo projects
+      (§2.3 dependency examples, §5 constraints, §6 critical path, etc.) on startup.
+      Idempotent — re-runs do not create duplicates. Intended for dev/test stacks
+      and customer demos; leave false in regular customer deployments.
+    type: Boolean
+    default: "false"
+    group: Demo
+
+  # Actual hours (PLAN-140 / SPEC-111)
+  CAPACITYPLANNING_ACTUALHOURS_SELFHEALING:
+    label: Self-healing redistribution of actual hours
+    description: >
+      When true, a booking arriving for a sales order that has never been
+      redistributed makes the saga request a full redistribution instead of
+      publishing a partial state (SPEC-111 R5). Leave false until SPEC-110 goal 1
+      (the RESD000 write-path fix, PLAN-139) runs in this environment: before
+      that, the self-healing path would keep writing the faulty RESD000 values
+      forward. The code ships either way - this only switches the behaviour on.
+    type: Boolean
+    default: "false"
+    group: Behaviour
+
+  # Actual hours (SPEC-125 R34)
+  CAPACITYPLANNING_ACTUALHOURS_AUTOMATIC_REDISTRIBUTION:
+    label: Automatic redistribution of actual hours after an update
+    description: >
+      When true, the CapacityPlanning worker asks ONCE after an update for the redistribution of the
+      actual hours of all sales orders (SPEC-121 R25) and starts it with the next start of the worker.
+      Off by default (SPEC-125 R34): an environment that was not told to run it starts no automatic run;
+      the orders can be redistributed one by one in the portal or in the task dialog. Switch it on per
+      environment once a run over its orders keeps the measured targets of SPEC-125 R26 and R27, then
+      restart the worker. It switches the automatic start only - the portal and the single order are
+      not affected.
+    type: Boolean
+    default: "false"
+    group: Behaviour
+
+# Maintenance Observer - watches for maintenance mode flag in database
+maintenance:
+  observer:
+    type: sqlExtendedProperty
+    # The maintenance flag lives as an extended property on the persistence
+    # database (where ams.project owns its data). The connection string is
+    # composed from the existing shared variables — DB_NAME alone is not
+    # defined in this manifest; DB_NAME_PERSISTENCE is the correct one.
+    connectionString: "Server=${DB_SERVER};Database=${DB_NAME_PERSISTENCE};User Id=${DB_RUNTIME_USER};Password=${DB_RUNTIME_PASSWORD};${DB_PARAMS}"
+    propertyName: ams-MaintenanceMode
+    maintenanceValue: "1"
+    normalValue: "0"
+    pollingInterval: 30s
+  # No setter: ams.project is a READ-ONLY observer of the maintenance flag. The flag is the legacy ERP's
+  # shared-DB maintenance signal (ERP sets it for exclusive DB access, e.g. a DB update, and clears it when
+  # done). ams.project must never write it — ERP owns set+clear. ams.project's own updates run via RSGO
+  # redeploy/operation-mode, not via this flag. (PLAN-114: webhook/SQL setter removed — caused a
+  # deactivation deadlock and wrongly made ams.project a writer of ERP's flag.)
+
+# Maintenance Edge (PLAN-114) - RSGO-managed reverse-proxy that survives product redeploys.
+# Public front-door on ${BFF_PORT}: proxies to the BFF while the product runs, and serves a
+# maintenance page + machine-readable GET /__status while it is stopped or being redeployed.
+# HTTP for now (no `tls:` block). TLS termination (tls.mode: reuse — shared hostname with RSGO)
+# is a later, separately-coordinated step (OIDC/CORS/WebBffUrl + IdentityServer redirect-URI flip).
+edge:
+  enabled: true
+  publicHostname: ${AMS_PROJECT_EXTERNAL_DNS_NAME_OR_IP}
+  publicPort: ${BFF_PORT}
+  upstream:
+    service: web-bff
+    port: 8080
+  network: ams-project-edge
+  # Client-side TCP MSS clamping for VPN robustness (avoids 502/timeout on large
+  # responses behind VPN tunnels with a PMTU black hole). "pmtu" = adaptive
+  # (recommended default). Alternatives: a fixed value 536..1460, or "off" (legacy
+  # behavior). Set explicitly to document intent; takes effect once RSGO ships the
+  # edge.mss feature — until then the key is simply ignored.
+  mss: pmtu
+  maintenancePage:
+    mode: default
+    branding:
+      productName: ams.project
+      locales:
+        - de
+        - en
+
+stacks:
+  # Core Stacks
+  infrastructure:
+    include: Infrastructure/infrastructure.yaml
+  platform:
+    include: Platform/platform.yaml
+
+  # Business Context Stacks (per bounded context for granular CI/CD deployment).
+  #
+  # Order matters on a fresh install: ErpIntegration runs a backfill migrator
+  # (0500_BackfillReferenceDisplayLabels) that touches every ams.erp row to fire
+  # TR_*_amsProject_Integrate triggers. Those enqueue *ChangedTrigger messages
+  # in [Integration].[ErpIntegration.Gateway]; the Gateway then publishes
+  # *Changed integration events via NServiceBus. NServiceBus subscriptions are
+  # only registered when subscriber endpoints start (AutoSubscribe), so any
+  # subscriber that has not yet started misses events with no replay.
+  # Therefore ErpIntegration is listed LAST — every cross-context subscriber
+  # (ProjectManagement, CapacityPlanning, ProductionPlanning, Reporting,
+  # ProjectExporting, Analytics, TaskContext.Worker, etc.) is already running
+  # and subscribed by the time the Gateway processes the backfill queue.
+  projectmanagement:
+    include: BusinessServices/Contexts/projectmanagement.yaml
+  discussions:
+    include: BusinessServices/Contexts/discussions.yaml
+  memo:
+    include: BusinessServices/Contexts/memo.yaml
+  salesorders:
+    include: BusinessServices/Contexts/salesorders.yaml
+  export:
+    include: BusinessServices/Contexts/export.yaml
+  capacityplanning:
+    include: BusinessServices/Contexts/capacityplanning.yaml
+  productionplanning:
+    include: BusinessServices/Contexts/productionplanning.yaml
+  reporting:
+    include: BusinessServices/Contexts/reporting.yaml
+  projectexporting:
+    include: BusinessServices/Contexts/projectexporting.yaml
+  projectimport:
+    include: BusinessServices/Contexts/projectimport.yaml
+  publicapi:
+    include: BusinessServices/Contexts/publicapi.yaml
+  analytics:
+    include: BusinessServices/Contexts/analytics.yaml
+  taskcontext:
+    include: BusinessServices/Contexts/taskcontext.yaml
+  erpintegration:
+    include: BusinessServices/Contexts/erpintegration.yaml
+
+networks:
+  ams-project-backend:
+    driver: bridge
+  ams-project-infra:
+    driver: bridge
+  # PLAN-114: shared network for the maintenance edge ↔ BFF (referenced external:true in platform.yaml).
+  ams-project-edge:
+    driver: bridge
